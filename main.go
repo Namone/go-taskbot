@@ -3,21 +3,15 @@ package main
 import (
 	"fmt"
 	"net/http"
-	"net/http/httputil"
 	"encoding/json"
 	"os"
+	"io/ioutil"
 
 	"github.com/google/go-github/github"
 	"golang.org/x/oauth2"
 	"github.com/joho/godotenv"
 	githuboauth "golang.org/x/oauth2/github"
 )
-
-var query struct {
-	Repository struct {
-		Description string
-	} `graphql:"repository(owner: \"Namone\", name: \"Task-Bot\")"`
-}
 
 const htmlIndex = `<html><body>
 Log in with <a href="/login">GitHub</a>
@@ -102,12 +96,41 @@ func handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 }
 
+type hook_struct struct {
+		Action string `json:"action"`
+		Number int `json:"number"`
+		PullRequest struct {
+			URL string `json:"url"`
+			Body string `json:"body"`
+			ClosedAt string `json:"closed_at"`
+		} `json:"pull_request"`
+		Description string `json:"description"`
+		Repository struct {
+			Name string `json:"name"`
+		} `json:"repository"`
+}
+
+var client *github.Client
 func handleWebhooks(w http.ResponseWriter, r *http.Request) {
-	requestDump, err := httputil.DumpRequest(r, true)
+	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		fmt.Println(err)
 	}
-	fmt.Println(string(requestDump))
+	fmt.Println(string(body))
+
+	var hook hook_struct
+	err = json.Unmarshal(body, &hook)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(hook.Description)
+	fmt.Println(hook.Repository)
+	fmt.Println(hook.Repository.Name)
+
+	if hook.Action == "pull_request" {
+		//pr, _, err := client.PullRequests.Edit(ctx, *prRepoOwner, *prRepo, newPR)
+	}
 }
 
 func main() {
