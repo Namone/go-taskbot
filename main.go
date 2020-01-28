@@ -150,15 +150,17 @@ func handleWebhooks(w http.ResponseWriter, r *http.Request) {
 			hook.Number,
 			newPR)
 		if err != nil {
-			panic(err)
+			// return err
 		}
 
 		fmt.Println(pr)
 		fmt.Println("Updated PR!")
 	}
+	// return nil
 }
 
 func main() {
+	flag.Parse()
 	// Load .env values...
 	godotenv.Load()
 	http.HandleFunc("/", handleMain)
