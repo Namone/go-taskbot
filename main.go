@@ -1,11 +1,12 @@
 package main
 
 import (
+	"context"
+	"flag"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"net/http/httputil"
 	"os"
 	"sync"
 
@@ -16,6 +17,33 @@ import (
 )
 
 type gitHubServer map[string]string //Placeholder stype to hold the functions
+
+type pullRequestHook struct {
+	Action      string `json:"action"`
+	Number      int    `json:"number"`
+	PullRequest struct {
+		URL      string `json:"url"`
+		Body     string `json:"body"`
+		State    string `json:"state"`
+		ClosedAt string `json:"closed_at"`
+	} `json:"pull_request"`
+	Description string `json:"description"`
+	Repository  struct {
+		Name  string `json:"name"`
+		Owner struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+	} `json:"repository"`
+}
+
+var client *github.Client
+var ctx = context.Background()
+var token *oauth2.Token
+var (
+	prSubject     = flag.String("pr-title", "test", "Title of the pull request. If not specified, no pull request will be created.")
+	prDescription = flag.String("pr-text", "testing", "Text to put in the description of the pull request.")
+)
+
 var query struct {
 	Repository struct {
 		Description string
@@ -43,8 +71,8 @@ var (
 	oauthStateString = "randomsalt"
 )
 
-func (g gitHubServer) tokenToJSON(token *oauth2.Token) (string, error) {
-	if d, err := json.Marshal(token); err != nil {
+func (g gitHubServer) tokenToJSON(t *oauth2.Token) (string, error) {
+	if d, err := json.Marshal(t); err != nil {
 		return "", err
 	} else {
 		return string(d), nil
@@ -52,11 +80,11 @@ func (g gitHubServer) tokenToJSON(token *oauth2.Token) (string, error) {
 }
 
 func (g gitHubServer) tokenFromJSON(jsonStr string) (*oauth2.Token, error) {
-	var token oauth2.Token
-	if err := json.Unmarshal([]byte(jsonStr), &token); err != nil {
+	var t oauth2.Token
+	if err := json.Unmarshal([]byte(jsonStr), &t); err != nil {
 		return nil, err
 	}
-	return &token, nil
+	return &t, nil
 }
 
 func (g gitHubServer) handleMain(w http.ResponseWriter, r *http.Request) {
@@ -79,13 +107,14 @@ func (g gitHubServer) handleGitHubCallback(w http.ResponseWriter, r *http.Reques
 	}
 
 	code := r.FormValue("code")
-	token, err := oauthConf.Exchange(oauth2.NoContext, code)
+	tok, err := oauthConf.Exchange(oauth2.NoContext, code)
 	if err != nil {
 		fmt.Printf("oauthConf.Exchange() failed with '%s'\n", err)
 		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 		return
 	}
 
+	token = tok
 	oauthClient := oauthConf.Client(oauth2.NoContext, token)
 	client := github.NewClient(oauthClient)
 	user, _, err := client.Users.Get(oauth2.NoContext, "")
@@ -106,12 +135,45 @@ func (g gitHubServer) handleGitHubCallback(w http.ResponseWriter, r *http.Reques
 	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 }
 
-func (g gitHubServer) handleWebhooks(w http.ResponseWriter, r *http.Request) {
-	requestDump, err := httputil.DumpRequest(r, true)
+func (g gitHubServer) handleWebhooks(w http.ResponseWriter, req *http.Request) {
+	decoder := json.NewDecoder(req.Body)
+	var pullRequest *pullRequestHook
+	err := decoder.Decode(&pullRequest)
 	if err != nil {
-		fmt.Println(err)
+		panic(err)
 	}
-	fmt.Println(string(requestDump))
+
+	oauthClient := oauthConf.Client(oauth2.NoContext, token)
+	client := github.NewClient(oauthClient)
+	switch action := pullRequest.Action; action {
+		case "opened":
+			newPR := &github.PullRequest{
+				Title:               prSubject,
+				Body:                flag.String("pr-body", pullRequest.PullRequest.Body, "PR Body."),
+				State:               flag.String("pr-state", pullRequest.PullRequest.State, "PR State."),
+				MaintainerCanModify: github.Bool(false),
+			}
+
+			pr, _, err := client.PullRequests.Edit(
+				oauth2.NoContext,
+				pullRequest.Repository.Owner.Login,
+				pullRequest.Repository.Name,
+				pullRequest.Number,
+				newPR)
+			if err != nil {
+				panic(err)
+			}
+
+			output, _ := json.Marshal(pr)
+			fmt.Println(string(output))
+		default:
+			fmt.Printf("Modified PR.")
+	}
+
+	// 	fmt.Println(pr)
+	// 	fmt.Println("Updated PR!")
+	// }
+	// return nil
 }
 
 //https://www.integralist.co.uk/posts/understanding-golangs-func-type/
