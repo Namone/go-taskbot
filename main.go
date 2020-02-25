@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"sync"
+	"strconv"
 
 	"github.com/google/go-github/github"
 	"github.com/joho/godotenv"
@@ -43,8 +44,8 @@ var ctx = context.Background()
 var token *oauth2.Token
 
 var (
-	prTitle = flag.String("pr-title", "example(TSK-01): commit description", "Title of the pull request. If not specified, no pull request will be created.")
-	prBody  = flag.String("pr-body", "_Please update your PR to include a link to the relevant ticket._", "Text to put in the description of the pull request.")
+	prTitle = flag.String("pr-title", "", "Title of the pull request. If not specified, no pull request will be created.")
+	prBody = flag.String("pr-body", "", "The body of the pull request.")
 )
 var query struct {
 	Repository struct {
@@ -59,8 +60,8 @@ Log in with <a href="/login">GitHub</a>
 
 var (
 	oauthConf = &oauth2.Config{
-		ClientID:     "cc617ba84077022614b7",                     //os.Getenv("CLIENT_ID"),
-		ClientSecret: "3138b62da5226ce5713b97f836588c6ba5153205", //os.Getenv("CLIENT_SECRET"),
+		ClientID:     os.Getenv("CLIENT_ID"),
+		ClientSecret: os.Getenv("CLIENT_SECRET"),
 		Scopes: []string{
 			"repo",
 			"read:repo_hook",
@@ -137,6 +138,29 @@ func (g gitHubServer) handleGitHubCallback(w http.ResponseWriter, r *http.Reques
 	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 }
 
+func (g gitHubServer) getOutput(matches []string) string {
+	output := "_Please update your PR title to include a JIRA ticker ID to the relevant ticket._"
+	if len(matches) > 0 {
+		output = ""
+	}
+	for i := 0; i < len(matches); i++ {
+
+		linkText := "[View related JIRA task]"
+		link := "(https://bluetent.atlassian.net/browse/" + matches[i] + ")"
+
+		if i >= 0 {
+			currentIndex := strconv.Itoa(i + 1)
+			length := strconv.Itoa(len(matches))
+			linkText := "[View related JIRA task (" + currentIndex + "/" + length + ")]"
+			output = output + "\n\n" + linkText + link
+		} else {
+			output = linkText + link
+		}
+	}
+
+	return output
+}
+
 func (g gitHubServer) handleWebhooks(w http.ResponseWriter, req *http.Request) {
 	decoder := json.NewDecoder(req.Body)
 	var pullRequest *pullRequestHook
@@ -150,16 +174,22 @@ func (g gitHubServer) handleWebhooks(w http.ResponseWriter, req *http.Request) {
 
 	switch action := pullRequest.Action; action {
 	case "opened":
+		r := regexp.MustCompile(`\b[a-zA-Z]{3}\-{1}\d{1,}\b|\b\d{6}\b`)
+		matches := r.FindAllString(pullRequest.PullRequest.Title, -1)
+		output := g.getOutput(matches)
+		if len(matches) <= 0 {
+			flag.Set("pr-title", "example(JIRA-ID): commit description")
+		} else {
+			flag.Set("pr-title", pullRequest.PullRequest.Title)
+		}
+
+		flag.Set("pr-body", output)
+
 		newPR := &github.PullRequest{
 			Title:               prTitle,
 			Body:                prBody,
 			MaintainerCanModify: github.Bool(false),
 		}
-
-		r, _ := regexp.Compile("/\b[a-zA-Z]{3}\\-{1}\\d{1,}\b|\b\\d{6}\b/g")
-
-		fmt.Println(pullRequest.PullRequest.Title)
-		fmt.Println(r.FindAllString(pullRequest.PullRequest.Title, -1))
 		_, _, err := client.PullRequests.Edit(
 			oauth2.NoContext,
 			pullRequest.Repository.Owner.Login,
@@ -175,7 +205,6 @@ func (g gitHubServer) handleWebhooks(w http.ResponseWriter, req *http.Request) {
 }
 
 //https://www.integralist.co.uk/posts/understanding-golangs-func-type/
-
 func main() {
 	// Load .env values...
 	godotenv.Load()
@@ -198,15 +227,10 @@ func startHTTPServer(wg *sync.WaitGroup) *http.Server {
 	srv := &http.Server{Addr: "7000"}
 
 	go func() {
-		defer wg.Done() // let main know we are done cleaning up
-
-		// always returns error. ErrServerClosed on graceful close
+		defer wg.Done()
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-			// unexpected error. port in use?
 			log.Fatalf("ListenAndServe(): %v", err)
 		}
 	}()
-
-	// returning reference so caller can call Shutdown()
 	return srv
 }
