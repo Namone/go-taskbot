@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"flag"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"sync"
 
 	"github.com/google/go-github/github"
@@ -22,6 +23,7 @@ type pullRequestHook struct {
 	Action      string `json:"action"`
 	Number      int    `json:"number"`
 	PullRequest struct {
+		Title    string `json:"title"`
 		URL      string `json:"url"`
 		Body     string `json:"body"`
 		State    string `json:"state"`
@@ -39,11 +41,11 @@ type pullRequestHook struct {
 var client *github.Client
 var ctx = context.Background()
 var token *oauth2.Token
-var (
-	prSubject     = flag.String("pr-title", "test", "Title of the pull request. If not specified, no pull request will be created.")
-	prDescription = flag.String("pr-text", "testing", "Text to put in the description of the pull request.")
-)
 
+var (
+	prTitle = flag.String("pr-title", "example(TSK-01): commit description", "Title of the pull request. If not specified, no pull request will be created.")
+	prBody  = flag.String("pr-body", "_Please update your PR to include a link to the relevant ticket._", "Text to put in the description of the pull request.")
+)
 var query struct {
 	Repository struct {
 		Description string
@@ -57,11 +59,10 @@ Log in with <a href="/login">GitHub</a>
 
 var (
 	oauthConf = &oauth2.Config{
-		ClientID:     os.Getenv("CLIENT_ID"),
-		ClientSecret: os.Getenv("CLIENT_SECRET"),
+		ClientID:     "cc617ba84077022614b7",                     //os.Getenv("CLIENT_ID"),
+		ClientSecret: "3138b62da5226ce5713b97f836588c6ba5153205", //os.Getenv("CLIENT_SECRET"),
 		Scopes: []string{
-			"repo:status",
-			"repo_deployment",
+			"repo",
 			"read:repo_hook",
 			"write:discussion",
 			"workflow",
@@ -100,6 +101,7 @@ func (g gitHubServer) handleGitHubLogin(w http.ResponseWriter, r *http.Request) 
 
 func (g gitHubServer) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	state := r.FormValue("state")
+
 	if state != oauthStateString {
 		fmt.Printf("invalid oauth state, expected '%s', got '%s'\n", oauthStateString, state)
 		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
@@ -115,7 +117,7 @@ func (g gitHubServer) handleGitHubCallback(w http.ResponseWriter, r *http.Reques
 	}
 
 	token = tok
-	oauthClient := oauthConf.Client(oauth2.NoContext, token)
+	oauthClient := oauthConf.Client(oauth2.NoContext, tok)
 	client := github.NewClient(oauthClient)
 	user, _, err := client.Users.Get(oauth2.NoContext, "")
 	if err != nil {
@@ -123,7 +125,7 @@ func (g gitHubServer) handleGitHubCallback(w http.ResponseWriter, r *http.Reques
 		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 		return
 	}
-	tokenAsString, err := g.tokenToJSON(token)
+	tokenAsString, err := g.tokenToJSON(tok)
 	if err != nil {
 		fmt.Printf("Error when converting token to a string: '%s'\n", err)
 		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
@@ -145,35 +147,31 @@ func (g gitHubServer) handleWebhooks(w http.ResponseWriter, req *http.Request) {
 
 	oauthClient := oauthConf.Client(oauth2.NoContext, token)
 	client := github.NewClient(oauthClient)
+
 	switch action := pullRequest.Action; action {
-		case "opened":
-			newPR := &github.PullRequest{
-				Title:               prSubject,
-				Body:                flag.String("pr-body", pullRequest.PullRequest.Body, "PR Body."),
-				State:               flag.String("pr-state", pullRequest.PullRequest.State, "PR State."),
-				MaintainerCanModify: github.Bool(false),
-			}
+	case "opened":
+		newPR := &github.PullRequest{
+			Title:               prTitle,
+			Body:                prBody,
+			MaintainerCanModify: github.Bool(false),
+		}
 
-			pr, _, err := client.PullRequests.Edit(
-				oauth2.NoContext,
-				pullRequest.Repository.Owner.Login,
-				pullRequest.Repository.Name,
-				pullRequest.Number,
-				newPR)
-			if err != nil {
-				panic(err)
-			}
+		r, _ := regexp.Compile("/\b[a-zA-Z]{3}\\-{1}\\d{1,}\b|\b\\d{6}\b/g")
 
-			output, _ := json.Marshal(pr)
-			fmt.Println(string(output))
-		default:
-			fmt.Printf("Modified PR.")
+		fmt.Println(pullRequest.PullRequest.Title)
+		fmt.Println(r.FindAllString(pullRequest.PullRequest.Title, -1))
+		_, _, err := client.PullRequests.Edit(
+			oauth2.NoContext,
+			pullRequest.Repository.Owner.Login,
+			pullRequest.Repository.Name,
+			pullRequest.Number,
+			newPR)
+		if err != nil {
+			panic(err)
+		}
+	default:
+		// Nothing.
 	}
-
-	// 	fmt.Println(pr)
-	// 	fmt.Println("Updated PR!")
-	// }
-	// return nil
 }
 
 //https://www.integralist.co.uk/posts/understanding-golangs-func-type/
@@ -184,9 +182,7 @@ func main() {
 
 	//Create a waitgroup to prevent program from exiting while HTTP server is in use
 	// httpServerExitDone := &sync.WaitGroup{}
-	server := gitHubServer{
-		"meme": "meme",
-	}
+	server := gitHubServer{}
 	http.HandleFunc("/", server.handleMain)
 	http.HandleFunc("/login", server.handleGitHubLogin)
 	http.HandleFunc("/github_go_taskbot", server.handleGitHubCallback)
