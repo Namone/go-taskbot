@@ -104,7 +104,7 @@ func (g gitHubServer) handleGitHubCallback(w http.ResponseWriter, r *http.Reques
 	state := r.FormValue("state")
 
 	if state != oauthStateString {
-		fmt.Printf("invalid oauth state, expected '%s', got '%s'\n", oauthStateString, state)
+		fmt.Printf("Invalid oauth state, expected '%s', got '%s'\n", oauthStateString, state)
 		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 		return
 	}
@@ -169,7 +169,22 @@ func (g gitHubServer) handleWebhooks(w http.ResponseWriter, req *http.Request) {
 		panic(err)
 	}
 
-	oauthClient := oauthConf.Client(oauth2.NoContext, token)
+	existingToken, err := g.tokenFromJSON(os.Getenv("OAUTH_TOKEN"))
+	if existingToken == nil {
+		panic("No OAUTH_TOKEN set!")
+	}
+
+	if err != nil {
+		panic(err)
+	}
+
+	refreshToken := new(oauth2.Token)
+	refreshToken.AccessToken = existingToken.AccessToken
+	refreshToken.RefreshToken = existingToken.RefreshToken
+	refreshToken.Expiry = existingToken.Expiry
+	refreshToken.TokenType = existingToken.TokenType
+
+	oauthClient := oauthConf.Client(oauth2.NoContext, refreshToken)
 	client := github.NewClient(oauthClient)
 
 	switch action := pullRequest.Action; action {
